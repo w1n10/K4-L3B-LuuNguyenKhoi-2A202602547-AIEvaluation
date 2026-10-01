@@ -246,24 +246,47 @@ class OpenAIGenerator:
     def __init__(self, max_output_tokens: int = 300) -> None:
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.model = os.getenv("OPENAI_MODEL", "").strip()
+        # Optional OpenAI-compatible provider, e.g. Gemini:
+        # https://generativelanguage.googleapis.com/v1beta/openai/
+        base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+        # Optional thinking control for reasoning models (e.g. "low", "none").
+        self.reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip() or None
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is missing from .env")
         if not self.model:
             raise RuntimeError("OPENAI_MODEL is missing from .env")
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        # Compatible providers implement Chat Completions, not the Responses API.
+        self.use_chat_completions = base_url is not None
         self.max_output_tokens = max_output_tokens
 
     def generate(self, prompt: str) -> str:
-        response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-            temperature=0,
-            max_output_tokens=self.max_output_tokens,
-        )
-        answer = response.output_text.strip()
+        if self.use_chat_completions:
+            answer = self._generate_with_chat_completions(prompt)
+        else:
+            response = self.client.responses.create(
+                model=self.model,
+                input=prompt,
+                temperature=0,
+                max_output_tokens=self.max_output_tokens,
+            )
+            answer = response.output_text.strip()
         if not answer:
             raise RuntimeError("OpenAI returned an empty answer")
         return answer
+
+    def _generate_with_chat_completions(self, prompt: str) -> str:
+        options: dict[str, Any] = {}
+        if self.reasoning_effort:
+            options["reasoning_effort"] = self.reasoning_effort
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=self.max_output_tokens,
+            **options,
+        )
+        return (response.choices[0].message.content or "").strip()
 
 
 @dataclass(frozen=True)
